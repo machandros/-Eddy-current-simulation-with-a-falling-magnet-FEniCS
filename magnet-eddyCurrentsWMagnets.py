@@ -1,3 +1,6 @@
+# Refs: https://github.com/gsc74/FEniCS-on-GPU/tree/master
+# Refs: https://www.sciencedirect.com/science/article/pii/S0168874X22000312?via%3Dihub 
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -21,11 +24,11 @@ def tran2SparseMatrix(A):
 mempool = cupy.get_default_memory_pool()
 
 with cupy.cuda.Device(0):
-    mempool.set_limit(size=3.5*1024**3)
+    mempool.set_limit(size=3.5*1024**3) # 3.5 GB, adjust this as per your available GPU memory size
 
 set_log_level(20)
 
-n = 65
+n = 65 # number of cells in each of the 3 directions
 mesh = UnitCubeMesh(n,n,n)
 
 # define solution files
@@ -35,7 +38,7 @@ xdmffile_V = XDMFFile('solutions/ElecPotential.xdmf')
 xdmffile_B = XDMFFile('solutions/magField.xdmf')
 xdmffile_E = XDMFFile('solutions/elecCurrent.xdmf')
 
-# Create time series (for use in reaction_system.py)
+# Create time series
 timeseries_B = TimeSeries('solutions/magScalarPotential')
 timeseries_V = TimeSeries('solutions/ElecPotential')
 timeseries_BF = TimeSeries('solutions/magField')
@@ -59,7 +62,6 @@ v, q = TestFunctions(V_VF)
 A_out = Function(V_VF)
 
 A0 = interpolate(Constant((0, 0, 0)),P)
-A_diff = interpolate(Constant((0, 0, 0)),P)
 
 B = Function(W)
 E = Function(W)
@@ -118,6 +120,8 @@ dy = 0
 def identifyMagnetCoords(t,velocity):
     global dy 
     dy = t*velocity
+    # The following coords define the corners of the magnet
+    # see that the magnet's y coords are being offset by dy in each time-step based on the velocity 
     x0 = 0.4
     y0 = 0.4 + dy
     x1 = 0.6
@@ -130,10 +134,9 @@ def identifyMagnetCoords(t,velocity):
 
 velocity = -1.4286 #m/s
 t = 0
-dt = 0.01
+dt = 0.01 # s
 
-# ex = Expression(('0','-1/(4*3.14*1e-7)','0'),degree = 1)
-ex = Expression(('0','-1','0'),degree = 1)
+ex = Expression(('0','-1','0'),degree = 1) # This defines the 'M' vector. Adjust this to vary the magnet's magnetisation direction and magnitude
 coords = np.copy(identifyMagnetCoords(t,velocity))
 M = Magnet(coords,ex,t,degree=1)
 
@@ -186,18 +189,18 @@ for t in np.arange(0,0.07,dt):
     bs = cupy.array(b)
     print("done 4, starting solver at ",datetime.datetime.now())
     start = datetime.datetime.now()
-    # A.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.lsqr(As, bs)[:1][0]) #slow
-    A_out.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.gmres(As, bs,maxiter=50000)[:1][0]) #slow
-    #A.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.cg(As, bs)[:1][0]) #not working
-    #A.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.cgs(As, bs)[:1][0]) #not working
-    # A.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.minres(As, bs)[:1][0]) #fast
+    
+    # There are other options for the solver, feel free to try others if interested. 
+    # See: https://docs.cupy.dev/en/stable/reference/scipy_sparse_linalg.html#
+    A_out.vector()[:] = cupy.asnumpy(cupyx.scipy.sparse.linalg.gmres(As, bs,maxiter=50000)[:1][0])
+    
     print("Finished solving at ",datetime.datetime.now(),"\n That took ", datetime.datetime.now()-start )
 
+    # Adjust this based on how often you want to do post-processing
+    # In post-processing we are going to derive B field and E field.
     if True:#count%5 == 0:
 
         print("####### post processing step ##########")
-        # B = project(as_vector(curl(A.split()[0])), W)
-        # B.rename("B","")
 
         B_trial = TrialFunction(W)
         B_Test = TestFunction(W)
@@ -259,6 +262,5 @@ for t in np.arange(0,0.07,dt):
         timeseries_BF.store(B.vector(),t)
         timeseries_EF.store(E.vector(),t)
 
-    A_diff = A_out.split()[0] - A0
     assigner.assign([A0, Function(Z)],A_out)
     count+=1
